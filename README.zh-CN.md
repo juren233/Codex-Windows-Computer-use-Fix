@@ -33,7 +33,7 @@
 
 从最新 Release 下载 `repair-codex-computer-use.ps1`：
 
-<https://github.com/juren233/Codex-Windows-Computer-use-Fix/releases/latest>
+[最新 Release](https://github.com/juren233/Codex-Windows-Computer-use-Fix/releases/latest)
 
 也可以直接用 PowerShell 下载：
 
