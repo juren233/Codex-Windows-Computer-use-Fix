@@ -31,7 +31,17 @@
 
 ## 快速开始
 
-运行修复前，建议先完全退出 Codex Desktop。
+从最新 Release 下载 `repair-codex-computer-use.ps1`：
+
+<https://github.com/juren233/Codex-Windows-Computer-use-Fix/releases/latest>
+
+也可以直接用 PowerShell 下载：
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/juren233/Codex-Windows-Computer-use-Fix/releases/latest/download/repair-codex-computer-use.ps1" -OutFile ".\repair-codex-computer-use.ps1"
+```
+
+运行修复前，建议先完全退出 Codex Desktop。脚本启动时如果没有传 `-Language`，会先要求选择语言。
 
 先预演将要执行的动作：
 
@@ -47,6 +57,14 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1"
 
 脚本执行完成后，需要重新打开 Codex Desktop。`Computer Use` 的 native pipe 只会在 Desktop 启动阶段重新注入。
 
+`-DryRun` 是当前状态检查加修复计划。因为它不会真正写入、重建或备份，所以可能显示某些项目当前未就绪；确认计划后去掉 `-DryRun` 才会执行正式修复。
+
+如果用于自动化，也可以跳过交互式语言选择：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" -Language zh-CN
+```
+
 ## 脚本会做什么
 
 脚本会自动执行以下动作：
@@ -56,11 +74,13 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1"
 3. 备份并重建 `.tmp\bundled-marketplaces\openai-bundled`
 4. 将 `browser`、`chrome`、`computer-use`、`latex` 同步到插件缓存
 5. 根据每个插件真实 `plugin.json` 版本号重建 `latest` junction
-6. 修正 `config.toml` 中的 `notify` helper 路径
-7. 确保以下 bundled 插件启用：
+6. 即使版本目录已经存在，也会校验关键文件，缓存残缺时会备份后重建
+7. 备份并修正 `config.toml` 中的 `notify` helper 路径
+8. 确保以下 bundled 插件启用：
    - `browser@openai-bundled`
    - `chrome@openai-bundled`
    - `computer-use@openai-bundled`
+9. 执行最终硬校验，关键项不通过时以失败退出
 
 脚本会读取每个 bundled 插件 `plugin.json` 中的真实插件版本号，不会把 Codex Desktop 的 App 包版本误当成插件版本。
 
@@ -72,6 +92,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1"
 | `-CodexHome` | `$env:USERPROFILE\.codex` | Codex home 目录 |
 | `-PackageName` | `OpenAI.Codex` | AppX 包名 |
 | `-BundledSourceRoot` | 空 | 手动指定 `openai-bundled` 源目录 |
+| `-Language` | 启动时选择 | `zh-CN` 或 `en-US` |
+| `-Yes` | `false` | 跳过最终确认提示 |
 
 示例：
 
@@ -97,6 +119,38 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" 
 4. 命名管道里出现 `\\.\pipe\codex-computer-use-*`
 5. Computer Use 实际调用不再报 `helper paths are unavailable`
 
+可复制的验证命令：
+
+```powershell
+Get-ChildItem -Path "\\.\pipe\" | Where-Object { $_.Name -like "codex-computer-use-*" }
+```
+
+```powershell
+$logRoot = "$env:LOCALAPPDATA\Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\Local\Codex\Logs"
+Get-ChildItem -Path $logRoot -Recurse -Filter "codex-desktop-*.log" |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1 |
+  Select-String -Pattern "computer-use native pipe startup ready|helper paths are unavailable|not_in_bundled_marketplace_plugin_names"
+```
+
+## 日志与备份
+
+正式修复会把完整执行日志写到：
+
+```text
+$CodexHome\repair-logs\computer-use\repair-*.log
+```
+
+脚本退出前也会打印每个备份路径。常见备份路径包括：
+
+```text
+$CodexHome\config.toml.backup-YYYYMMDD-HHMMSS
+$CodexHome\.tmp\bundled-marketplaces\openai-bundled.backup-YYYYMMDD-HHMMSS
+$CodexHome\plugins\cache\openai-bundled\<plugin>\<version>.backup-YYYYMMDD-HHMMSS
+```
+
+`-DryRun` 不会创建日志、备份或文件改动。正式运行会在退出前打印精确日志路径和每个备份路径。
+
 ## 什么情况下不适用
 
 这个脚本修复的是本地 bundled marketplace、插件缓存和 helper 路径漂移。它不能修复所有 Computer Use 问题。
@@ -118,6 +172,6 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" 
 
 - 脚本会在重建前备份现有 `.tmp\bundled-marketplaces\openai-bundled` 目录
 - 脚本只会停止从 Codex bundled 插件缓存中启动的 `extension-host.exe`
-- 脚本会修改 `$CodexHome\config.toml`
+- 脚本会备份并修改 `$CodexHome\config.toml`
 - 脚本不会创建、克隆或初始化 Git 仓库
 - 诊断新问题时，建议先运行 `-DryRun`
