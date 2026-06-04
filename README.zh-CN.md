@@ -65,9 +65,21 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1"
 pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" -Language zh-CN -NoPause
 ```
 
+预览备份清理：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" -CleanupBackups -DryRun
+```
+
+清理本脚本产生的备份：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" -CleanupBackups
+```
+
 ## 脚本会做什么
 
-脚本会自动执行以下动作：
+修复模式会自动执行以下动作：
 
 1. 从 Codex Desktop AppX 包中定位 bundled 插件源目录
 2. 停止从 Codex bundled 插件缓存中启动的 `extension-host.exe`
@@ -84,11 +96,20 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" 
 
 脚本会读取每个 bundled 插件 `plugin.json` 中的真实插件版本号，不会把 Codex Desktop 的 App 包版本误当成插件版本。
 
+清理模式只删除本脚本产生的备份路径：
+
+1. `$CodexHome\config.toml.backup-*`
+2. `$CodexHome\.tmp\bundled-marketplaces\openai-bundled.backup-*`
+3. `$CodexHome\plugins\cache\openai-bundled\<plugin>\<version>.backup-*`
+
+它不会删除当前有效的 `config.toml`、当前插件缓存、当前插件市场或修复日志。
+
 ## 参数
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `-DryRun` | `false` | 只预览动作，不写入文件 |
+| `-CleanupBackups` | `false` | 清理本脚本产生的备份文件和目录 |
 | `-CodexHome` | `$env:USERPROFILE\.codex` | Codex home 目录 |
 | `-PackageName` | `OpenAI.Codex` | AppX 包名 |
 | `-BundledSourceRoot` | 空 | 手动指定 `openai-bundled` 源目录 |
@@ -136,7 +157,7 @@ Get-ChildItem -Path $logRoot -Recurse -Filter "codex-desktop-*.log" |
 
 ## 日志与备份
 
-正式修复会把完整执行日志写到：
+正式修复和备份清理会把完整执行日志写到：
 
 ```text
 $CodexHome\repair-logs\computer-use\repair-*.log
@@ -151,6 +172,8 @@ $CodexHome\plugins\cache\openai-bundled\<plugin>\<version>.backup-YYYYMMDD-HHMMS
 ```
 
 `-DryRun` 不会创建日志、备份或文件改动。正式运行会在退出前打印精确日志路径和每个备份路径。
+
+备份清理也会在删除前打印每个匹配路径。想先检查清理列表时，请先运行 `-CleanupBackups -DryRun`。
 
 ## 什么情况下不适用
 
@@ -174,6 +197,7 @@ $CodexHome\plugins\cache\openai-bundled\<plugin>\<version>.backup-YYYYMMDD-HHMMS
 - 脚本会在重建前备份现有 `.tmp\bundled-marketplaces\openai-bundled` 目录
 - 脚本只会停止从 Codex bundled 插件缓存中启动的 `extension-host.exe`
 - 脚本会备份并修改 `$CodexHome\config.toml`
+- `-CleanupBackups` 只会删除符合本脚本备份命名规则的路径
 - 脚本不会创建、克隆或初始化 Git 仓库
 - 默认会在退出前暂停，方便用户看清结果；无人值守运行可使用 `-NoPause` 或 `-Yes`
 - 诊断新问题时，建议先运行 `-DryRun`
