@@ -8,7 +8,7 @@
 
 这个仓库提供一个 PowerShell 7 修复脚本，用于修复 Windows 版 Codex Desktop 的本地 bundled 插件状态。
 
-它适用于插件明明已经安装，但 Codex Desktop 因为本地 marketplace、插件缓存或 helper 路径漂移，无法启动或发现 Windows Computer Use helper 的情况。
+它适用于插件明明已经安装，但 Codex Desktop 因为本地插件市场、插件缓存或辅助程序路径漂移，无法启动或发现 Windows Computer Use 辅助程序的情况。
 
 ## 适用现象
 
@@ -55,14 +55,14 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" 
 pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1"
 ```
 
-脚本执行完成后，需要重新打开 Codex Desktop。`Computer Use` 的 native pipe 只会在 Desktop 启动阶段重新注入。
+脚本执行完成后，窗口会停留并等待按 Enter，方便查看结果、日志路径和备份路径。修复后需要重新打开 Codex Desktop。`Computer Use` 的 native pipe 只会在 Desktop 启动阶段重新注入。
 
 `-DryRun` 是当前状态检查加修复计划。因为它不会真正写入、重建或备份，所以可能显示某些项目当前未就绪；确认计划后去掉 `-DryRun` 才会执行正式修复。
 
-如果用于自动化，也可以跳过交互式语言选择：
+如果用于自动化，也可以跳过交互式语言选择和结束暂停：
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" -Language zh-CN
+pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" -Language zh-CN -NoPause
 ```
 
 ## 脚本会做什么
@@ -75,7 +75,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" 
 4. 将 `browser`、`chrome`、`computer-use`、`latex` 同步到插件缓存
 5. 根据每个插件真实 `plugin.json` 版本号重建 `latest` junction
 6. 即使版本目录已经存在，也会校验关键文件，缓存残缺时会备份后重建
-7. 备份并修正 `config.toml` 中的 `notify` helper 路径
+7. 备份并修正 `config.toml` 中的 `notify` 辅助程序路径
 8. 确保以下 bundled 插件启用：
    - `browser@openai-bundled`
    - `chrome@openai-bundled`
@@ -94,6 +94,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" 
 | `-BundledSourceRoot` | 空 | 手动指定 `openai-bundled` 源目录 |
 | `-Language` | 启动时选择 | `zh-CN` 或 `en-US` |
 | `-Yes` | `false` | 跳过最终确认提示 |
+| `-NoPause` | `false` | 退出前不等待按 Enter |
 
 示例：
 
@@ -153,7 +154,7 @@ $CodexHome\plugins\cache\openai-bundled\<plugin>\<version>.backup-YYYYMMDD-HHMMS
 
 ## 什么情况下不适用
 
-这个脚本修复的是本地 bundled marketplace、插件缓存和 helper 路径漂移。它不能修复所有 Computer Use 问题。
+这个脚本修复的是本地 bundled 插件市场、插件缓存和辅助程序路径漂移。它不能修复所有 Computer Use 问题。
 
 以下情况不适用：
 
@@ -174,4 +175,5 @@ $CodexHome\plugins\cache\openai-bundled\<plugin>\<version>.backup-YYYYMMDD-HHMMS
 - 脚本只会停止从 Codex bundled 插件缓存中启动的 `extension-host.exe`
 - 脚本会备份并修改 `$CodexHome\config.toml`
 - 脚本不会创建、克隆或初始化 Git 仓库
+- 默认会在退出前暂停，方便用户看清结果；无人值守运行可使用 `-NoPause` 或 `-Yes`
 - 诊断新问题时，建议先运行 `-DryRun`
