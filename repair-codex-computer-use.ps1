@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$DryRun,
+    [switch]$CleanupBackups,
     [switch]$Yes,
     [switch]$NoPause,
     [ValidateSet('zh-CN', 'en-US')]
@@ -15,6 +16,7 @@ $ErrorActionPreference = 'Stop'
 
 $script:UiLanguage = 'zh-CN'
 $script:BackupPaths = [System.Collections.Generic.List[string]]::new()
+$script:DeletedBackupPaths = [System.Collections.Generic.List[string]]::new()
 $script:TranscriptStarted = $false
 $script:LogPath = $null
 $script:ExitCode = 0
@@ -204,6 +206,109 @@ function Confirm-RepairPlan {
     $answer = Read-Host (T '确认继续？输入 Y 继续' 'Continue? Type Y to proceed')
     if ($answer -notin @('Y', 'y')) {
         throw (T '用户取消操作。' 'Operation cancelled by user.')
+    }
+}
+
+function Get-ScriptBackupItems {
+    param([string]$CodexHomePath)
+
+    $items = [System.Collections.Generic.List[object]]::new()
+
+    $configBackupParent = $CodexHomePath
+    if (Test-Path -LiteralPath $configBackupParent) {
+        Get-ChildItem -LiteralPath $configBackupParent -Filter 'config.toml.backup-*' -File -ErrorAction SilentlyContinue | ForEach-Object {
+            $items.Add([PSCustomObject]@{ Path = $_.FullName; KindZh = '配置备份'; KindEn = 'config backup' })
+        }
+    }
+
+    $tmpParent = Join-Path $CodexHomePath '.tmp\bundled-marketplaces'
+    if (Test-Path -LiteralPath $tmpParent) {
+        Get-ChildItem -LiteralPath $tmpParent -Filter 'openai-bundled.backup-*' -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            $items.Add([PSCustomObject]@{ Path = $_.FullName; KindZh = '插件市场备份'; KindEn = 'marketplace backup' })
+        }
+    }
+
+    $cacheRoot = Join-Path $CodexHomePath 'plugins\cache\openai-bundled'
+    if (Test-Path -LiteralPath $cacheRoot) {
+        Get-ChildItem -LiteralPath $cacheRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-ChildItem -LiteralPath $_.FullName -Filter '*.backup-*' -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                $items.Add([PSCustomObject]@{ Path = $_.FullName; KindZh = '插件缓存备份'; KindEn = 'plugin cache backup' })
+            }
+        }
+    }
+
+    return @($items | Sort-Object Path -Unique)
+}
+
+function Confirm-CleanupBackupsPlan {
+    param([object[]]$BackupItems)
+
+    Write-Section '清理备份文件' 'Clean backup files'
+    Write-InfoLine 'Codex home' 'Codex home' ([System.IO.Path]::GetFullPath($CodexHome))
+    Write-InfoLine '匹配到的备份数量' 'Matched backup count' ([string]$BackupItems.Count)
+
+    if ($BackupItems.Count -eq 0) {
+        Write-Ok '没有找到本脚本产生的备份文件或目录。' 'No backup files or directories created by this script were found.'
+        return
+    }
+
+    Write-Host ''
+    Write-Host (T '将清理以下备份：' 'The following backups will be cleaned:')
+    foreach ($item in $BackupItems) {
+        Write-InfoLine $item.KindZh $item.KindEn $item.Path
+    }
+
+    Write-WarnLine '只会删除符合本脚本备份命名规则的路径，不会删除当前有效配置、插件缓存或日志。' 'Only paths matching this script backup naming rules will be deleted. Current config, plugin cache, and logs will not be deleted.'
+
+    if ($DryRun -or $Yes) {
+        return
+    }
+
+    $answer = Read-Host (T '确认清理？输入 Y 继续' 'Clean these backups? Type Y to proceed')
+    if ($answer -ne 'Y' -and $answer -ne 'y') {
+        throw (T '用户取消清理。' 'Cleanup cancelled by user.')
+    }
+}
+
+function Remove-ScriptBackupItems {
+    param([object[]]$BackupItems)
+
+    foreach ($item in $BackupItems) {
+        Invoke-IfNeeded "删除备份 $($item.Path)" "Delete backup $($item.Path)" {
+            Remove-Item -LiteralPath $item.Path -Recurse -Force
+        }
+        $script:DeletedBackupPaths.Add($item.Path)
+    }
+}
+
+function Show-CleanupSummary {
+    Write-Section '清理结果' 'Cleanup summary'
+    if ($script:LogPath) {
+        Write-InfoLine '日志文件' 'Log file' $script:LogPath
+    }
+    else {
+        Write-InfoLine '日志文件' 'Log file' (T '预演模式未创建日志文件' 'No log file was created in DryRun mode')
+    }
+
+    if ($script:DeletedBackupPaths.Count -eq 0) {
+        Write-InfoLine '已删除备份' 'Deleted backups' (T '无' 'None')
+    }
+    else {
+        foreach ($path in $script:DeletedBackupPaths) {
+            if ($DryRun) {
+                Write-InfoLine '计划删除备份' 'Planned backup deletion' $path
+            }
+            else {
+                Write-InfoLine '已删除备份' 'Deleted backup' $path
+            }
+        }
+    }
+
+    if ($DryRun) {
+        Write-WarnLine '当前是预演模式，没有删除任何备份。' 'This was a DryRun. No backups were deleted.'
+    }
+    else {
+        Write-Ok '备份清理已完成。' 'Backup cleanup finished.'
     }
 }
 
@@ -721,34 +826,43 @@ try {
     )
 
     Start-RepairTranscript -CodexHomePath $codexHomePath
-    Confirm-RepairPlan -CodexHomePath $codexHomePath -ConfigPath $configPath -TmpMarketplaceRoot $tmpMarketplaceRoot -CacheMarketplaceRoot $cacheMarketplaceRoot
 
-    Write-Section '定位源目录' 'Locate source'
-    $bundledSource = Get-LatestCodexBundledSource -PackageName $PackageName -SourceOverride $BundledSourceRoot
-    Write-InfoLine 'App 包版本' 'App package version' ([string]$bundledSource.PackageVersion)
-    Write-InfoLine 'Bundled 源目录' 'Bundled source directory' $bundledSource.PluginRoot
+    if ($CleanupBackups) {
+        $backupItems = Get-ScriptBackupItems -CodexHomePath $codexHomePath
+        Confirm-CleanupBackupsPlan -BackupItems $backupItems
+        Remove-ScriptBackupItems -BackupItems $backupItems
+        Show-CleanupSummary
+    }
+    else {
+        Confirm-RepairPlan -CodexHomePath $codexHomePath -ConfigPath $configPath -TmpMarketplaceRoot $tmpMarketplaceRoot -CacheMarketplaceRoot $cacheMarketplaceRoot
 
-    Write-Section '执行修复' 'Run repair'
-    Write-Step '停止可能锁住 marketplace 的 extension-host 进程。' 'Stop extension-host processes that may lock the marketplace.'
-    Stop-ExtensionHostProcess -CacheRoot $cacheMarketplaceRoot
+        Write-Section '定位源目录' 'Locate source'
+        $bundledSource = Get-LatestCodexBundledSource -PackageName $PackageName -SourceOverride $BundledSourceRoot
+        Write-InfoLine 'App 包版本' 'App package version' ([string]$bundledSource.PackageVersion)
+        Write-InfoLine 'Bundled 源目录' 'Bundled source directory' $bundledSource.PluginRoot
 
-    Write-Step '重建 .tmp 下的 bundled 插件市场。' 'Rebuild the bundled marketplace under .tmp.'
-    Reset-TmpMarketplace -BundledSourceRoot $bundledSource.PluginRoot -TmpMarketplaceRoot $tmpMarketplaceRoot
+        Write-Section '执行修复' 'Run repair'
+        Write-Step '停止可能锁住 marketplace 的 extension-host 进程。' 'Stop extension-host processes that may lock the marketplace.'
+        Stop-ExtensionHostProcess -CacheRoot $cacheMarketplaceRoot
 
-    Write-Step '同步 bundled 插件缓存并重建 latest 链接。' 'Sync bundled plugin cache and recreate latest links.'
-    $pluginVersions = Sync-PluginCache -BundledSourceRoot $bundledSource.PluginRoot -CacheMarketplaceRoot $cacheMarketplaceRoot -PluginNames $pluginNames
+        Write-Step '重建 .tmp 下的 bundled 插件市场。' 'Rebuild the bundled marketplace under .tmp.'
+        Reset-TmpMarketplace -BundledSourceRoot $bundledSource.PluginRoot -TmpMarketplaceRoot $tmpMarketplaceRoot
 
-    $computerUseVersion = $pluginVersions['computer-use']
-    $helperPath = Join-Path $cacheMarketplaceRoot "computer-use\$computerUseVersion\node_modules\@oai\sky\bin\windows\codex-computer-use.exe"
-    Write-InfoLine 'Computer Use 插件版本' 'Computer Use plugin version' $computerUseVersion
-    Write-InfoLine 'Computer Use 辅助程序' 'Computer Use helper' $helperPath
+        Write-Step '同步 bundled 插件缓存并重建 latest 链接。' 'Sync bundled plugin cache and recreate latest links.'
+        $pluginVersions = Sync-PluginCache -BundledSourceRoot $bundledSource.PluginRoot -CacheMarketplaceRoot $cacheMarketplaceRoot -PluginNames $pluginNames
 
-    Write-Step '备份并修正 config.toml。' 'Back up and update config.toml.'
-    Update-ConfigToml -ConfigPath $configPath -NotifyPath $helperPath -PluginIds $requiredPluginIds -MarketplacePath $marketplaceConfigPath
+        $computerUseVersion = $pluginVersions['computer-use']
+        $helperPath = Join-Path $cacheMarketplaceRoot "computer-use\$computerUseVersion\node_modules\@oai\sky\bin\windows\codex-computer-use.exe"
+        Write-InfoLine 'Computer Use 插件版本' 'Computer Use plugin version' $computerUseVersion
+        Write-InfoLine 'Computer Use 辅助程序' 'Computer Use helper' $helperPath
 
-    $checks = Test-FinalRepairResult -TmpMarketplaceRoot $tmpMarketplaceRoot -HelperPath $helperPath -ConfigPath $configPath -PluginIds $requiredPluginIds
-    Assert-FinalRepairResult -Checks $checks
-    Show-Summary
+        Write-Step '备份并修正 config.toml。' 'Back up and update config.toml.'
+        Update-ConfigToml -ConfigPath $configPath -NotifyPath $helperPath -PluginIds $requiredPluginIds -MarketplacePath $marketplaceConfigPath
+
+        $checks = Test-FinalRepairResult -TmpMarketplaceRoot $tmpMarketplaceRoot -HelperPath $helperPath -ConfigPath $configPath -PluginIds $requiredPluginIds
+        Assert-FinalRepairResult -Checks $checks
+        Show-Summary
+    }
 }
 catch {
     $script:ExitCode = 1
@@ -760,6 +874,16 @@ catch {
     if ($script:BackupPaths.Count -gt 0) {
         foreach ($backupPath in $script:BackupPaths) {
             Write-InfoLine '备份文件或目录' 'Backup file or directory' $backupPath
+        }
+    }
+    if ($script:DeletedBackupPaths.Count -gt 0) {
+        foreach ($backupPath in $script:DeletedBackupPaths) {
+            if ($DryRun) {
+                Write-InfoLine '计划删除备份' 'Planned backup deletion' $backupPath
+            }
+            else {
+                Write-InfoLine '已处理备份' 'Processed backup' $backupPath
+            }
         }
     }
 }
