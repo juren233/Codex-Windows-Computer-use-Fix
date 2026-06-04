@@ -31,9 +31,7 @@ This script is likely useful when you see one or more of these signals:
 
 ## Quick Start
 
-Download `repair-codex-computer-use.ps1` from the latest release:
-
-[latest Release](https://github.com/juren233/Codex-Windows-Computer-use-Fix/releases/latest)
+Download `repair-codex-computer-use.ps1` from the [latest Release](https://github.com/juren233/Codex-Windows-Computer-use-Fix/releases/latest).
 
 Or download it directly from PowerShell:
 
