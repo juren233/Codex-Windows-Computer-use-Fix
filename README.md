@@ -65,9 +65,21 @@ For automation, you may skip the interactive language prompt and the final pause
 pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" -Language en-US -NoPause
 ```
 
+Preview backup cleanup:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" -CleanupBackups -DryRun
+```
+
+Clean backups created by this script:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" -CleanupBackups
+```
+
 ## What The Script Does
 
-The script performs these actions:
+Repair mode performs these actions:
 
 1. Locates the bundled plugin source from the Codex Desktop AppX package
 2. Stops `extension-host.exe` if it is running from the Codex bundled plugin cache
@@ -84,11 +96,20 @@ The script performs these actions:
 
 The script reads the real plugin version from each bundled plugin's `plugin.json`. It does not assume the Codex Desktop app package version is the same as the plugin version.
 
+Cleanup mode only removes backup paths created by this script:
+
+1. `$CodexHome\config.toml.backup-*`
+2. `$CodexHome\.tmp\bundled-marketplaces\openai-bundled.backup-*`
+3. `$CodexHome\plugins\cache\openai-bundled\<plugin>\<version>.backup-*`
+
+It does not remove the active `config.toml`, active plugin cache, current marketplace, or repair logs.
+
 ## Parameters
 
 | Parameter | Default | Description |
 | --- | --- | --- |
 | `-DryRun` | `false` | Preview actions without changing files |
+| `-CleanupBackups` | `false` | Clean backup files and directories created by this script |
 | `-CodexHome` | `$env:USERPROFILE\.codex` | Codex home directory |
 | `-PackageName` | `OpenAI.Codex` | AppX package name |
 | `-BundledSourceRoot` | empty | Manually provide the `openai-bundled` source directory |
@@ -136,7 +157,7 @@ Get-ChildItem -Path $logRoot -Recurse -Filter "codex-desktop-*.log" |
 
 ## Logs And Backups
 
-Formal repair runs write a transcript log under:
+Formal repair and cleanup runs write a transcript log under:
 
 ```text
 $CodexHome\repair-logs\computer-use\repair-*.log
@@ -151,6 +172,8 @@ $CodexHome\plugins\cache\openai-bundled\<plugin>\<version>.backup-YYYYMMDD-HHMMS
 ```
 
 `-DryRun` does not create logs, backups, or file changes. A formal run prints the exact log path and every backup path before it exits.
+
+Backup cleanup also prints every matched path before deleting it. Run `-CleanupBackups -DryRun` first if you want to review the cleanup list without deleting anything.
 
 ## When This Script Will Not Help
 
@@ -174,6 +197,7 @@ It will not help when:
 - The script backs up the existing `.tmp\bundled-marketplaces\openai-bundled` directory before rebuilding it
 - The script stops `extension-host.exe` only when it is running from the Codex bundled plugin cache
 - The script backs up and modifies `$CodexHome\config.toml`
+- `-CleanupBackups` only deletes backup paths that match this script's backup naming rules
 - The script does not create, clone, or initialize a Git repository
 - By default, the script pauses before closing so users can read the result; use `-NoPause` or `-Yes` for unattended runs
 - Run `-DryRun` first when diagnosing a new failure
