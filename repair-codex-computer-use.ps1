@@ -2,6 +2,7 @@
 param(
     [switch]$DryRun,
     [switch]$Yes,
+    [switch]$NoPause,
     [ValidateSet('zh-CN', 'en-US')]
     [string]$Language,
     [string]$CodexHome = (Join-Path $env:USERPROFILE '.codex'),
@@ -16,6 +17,7 @@ $script:UiLanguage = 'zh-CN'
 $script:BackupPaths = [System.Collections.Generic.List[string]]::new()
 $script:TranscriptStarted = $false
 $script:LogPath = $null
+$script:ExitCode = 0
 
 function Select-UiLanguage {
     if (-not [string]::IsNullOrWhiteSpace($Language)) {
@@ -84,7 +86,7 @@ function Write-Step {
         [string]$En
     )
 
-    Write-Host ('[*] ' + (T $Zh $En))
+    Write-Host ((T '[步骤] ' '[Step] ') + (T $Zh $En))
 }
 
 function Write-Ok {
@@ -93,7 +95,7 @@ function Write-Ok {
         [string]$En
     )
 
-    Write-Host ('[OK] ' + (T $Zh $En))
+    Write-Host ((T '[完成] ' '[OK] ') + (T $Zh $En))
 }
 
 function Write-WarnLine {
@@ -102,7 +104,7 @@ function Write-WarnLine {
         [string]$En
     )
 
-    Write-Warning (T $Zh $En)
+    Write-Host ((T '警告: ' 'Warning: ') + (T $Zh $En)) -ForegroundColor Yellow
 }
 
 function Write-InfoLine {
@@ -113,6 +115,18 @@ function Write-InfoLine {
     )
 
     Write-Host ((T $LabelZh $LabelEn) + ': ' + $Value)
+}
+
+function Wait-BeforeExit {
+    if ($NoPause -or $Yes) {
+        return
+    }
+    if ([Console]::IsInputRedirected) {
+        return
+    }
+
+    Write-Host ''
+    Read-Host (T '按 Enter 关闭窗口' 'Press Enter to close this window') | Out-Null
 }
 
 function Assert-PowerShell7 {
@@ -140,7 +154,7 @@ function Start-RepairTranscript {
     param([string]$CodexHomePath)
 
     if ($DryRun) {
-        Write-WarnLine 'DryRun 模式不会创建日志文件或修改文件。' 'DryRun mode does not create a log file or modify files.'
+        Write-WarnLine '预演模式不会创建日志文件或修改文件。' 'DryRun mode does not create a log file or modify files.'
         return
     }
 
@@ -170,14 +184,14 @@ function Confirm-RepairPlan {
     Write-Section '执行计划' 'Repair plan'
     Write-InfoLine 'Codex home' 'Codex home' $CodexHomePath
     Write-InfoLine '配置文件' 'Config file' $ConfigPath
-    Write-InfoLine 'Marketplace 目录' 'Marketplace directory' $TmpMarketplaceRoot
+    Write-InfoLine '插件市场目录' 'Marketplace directory' $TmpMarketplaceRoot
     Write-InfoLine '插件缓存目录' 'Plugin cache directory' $CacheMarketplaceRoot
 
     Write-Host ''
     Write-Host (T '脚本将执行以下动作：' 'The script will perform these actions:')
-    Write-Host (T '1. 备份并重建 bundled marketplace。' '1. Back up and rebuild the bundled marketplace.')
+    Write-Host (T '1. 备份并重建 bundled 插件市场。' '1. Back up and rebuild the bundled marketplace.')
     Write-Host (T '2. 校验并修复 bundled 插件缓存。' '2. Validate and repair the bundled plugin cache.')
-    Write-Host (T '3. 重建 latest junction。' '3. Recreate latest junctions.')
+    Write-Host (T '3. 重建 latest 链接。' '3. Recreate latest links.')
     Write-Host (T '4. 备份并更新 config.toml。' '4. Back up and update config.toml.')
     Write-Host (T '5. 执行最终硬校验。' '5. Run final hard validation.')
 
@@ -257,7 +271,7 @@ function Invoke-IfNeeded {
     )
 
     if ($DryRun) {
-        Write-Host ('[DryRun] ' + (T $DescriptionZh $DescriptionEn))
+        Write-Host ((T '[预演] ' '[DryRun] ') + (T $DescriptionZh $DescriptionEn))
         return
     }
 
@@ -329,7 +343,7 @@ function Reset-TmpMarketplace {
     }
 
     Move-ToBackupIfExists -Path $TmpMarketplaceRoot | Out-Null
-    Invoke-IfNeeded "复制 bundled marketplace 到 $TmpMarketplaceRoot" "Copy bundled marketplace to $TmpMarketplaceRoot" {
+    Invoke-IfNeeded "复制 bundled 插件市场到 $TmpMarketplaceRoot" "Copy bundled marketplace to $TmpMarketplaceRoot" {
         Copy-Item -LiteralPath $BundledSourceRoot -Destination $tmpParent -Recurse -Force
     }
 }
@@ -609,13 +623,13 @@ function Test-FinalRepairResult {
     }
 
     $checks = [System.Collections.Generic.List[object]]::new()
-    $checks.Add([PSCustomObject]@{ Name = 'TmpMarketplaceJson'; Passed = (Test-Path -LiteralPath $tmpMarketplaceJson); Detail = $tmpMarketplaceJson })
-    $checks.Add([PSCustomObject]@{ Name = 'ComputerUseHelper'; Passed = (Test-Path -LiteralPath $HelperPath); Detail = $HelperPath })
-    $checks.Add([PSCustomObject]@{ Name = 'NotifyPath'; Passed = ($configContent.IndexOf($HelperPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0); Detail = $HelperPath })
+    $checks.Add([PSCustomObject]@{ NameZh = '插件市场文件'; NameEn = 'Marketplace file'; Passed = (Test-Path -LiteralPath $tmpMarketplaceJson); Detail = $tmpMarketplaceJson })
+    $checks.Add([PSCustomObject]@{ NameZh = 'Computer Use 辅助程序'; NameEn = 'Computer Use helper'; Passed = (Test-Path -LiteralPath $HelperPath); Detail = $HelperPath })
+    $checks.Add([PSCustomObject]@{ NameZh = '配置中的辅助程序路径'; NameEn = 'Helper path in config'; Passed = ($configContent.IndexOf($HelperPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0); Detail = $HelperPath })
 
     foreach ($pluginId in $PluginIds) {
         $header = "[plugins.`"$pluginId`"]"
-        $checks.Add([PSCustomObject]@{ Name = "PluginEnabled:$pluginId"; Passed = ($configContent.IndexOf($header, [System.StringComparison]::OrdinalIgnoreCase) -ge 0); Detail = $header })
+        $checks.Add([PSCustomObject]@{ NameZh = "启用插件 $pluginId"; NameEn = "Plugin enabled: $pluginId"; Passed = ($configContent.IndexOf($header, [System.StringComparison]::OrdinalIgnoreCase) -ge 0); Detail = $header })
     }
 
     return $checks
@@ -626,22 +640,23 @@ function Assert-FinalRepairResult {
 
     if ($DryRun) {
         Write-Section '当前状态检查' 'Current state check'
-        Write-WarnLine 'DryRun 只读取当前状态，不会把计划动作模拟成已完成结果。' 'DryRun reads the current state only; it does not simulate planned actions as completed.'
+        Write-WarnLine '预演模式只读取当前状态，不会把计划动作模拟成已完成结果。' 'DryRun reads the current state only; it does not simulate planned actions as completed.'
     }
     else {
         Write-Section '最终校验' 'Final validation'
     }
 
     foreach ($check in $Checks) {
+        $checkName = T $check.NameZh $check.NameEn
         if ($check.Passed) {
-            Write-Ok "$($check.Name): $($check.Detail)" "$($check.Name): $($check.Detail)"
+            Write-Ok "$checkName`: $($check.Detail)" "$checkName`: $($check.Detail)"
         }
         else {
             if ($DryRun) {
-                Write-WarnLine "$($check.Name) 当前未就绪: $($check.Detail)" "$($check.Name) is not ready now: $($check.Detail)"
+                Write-WarnLine "$checkName 当前未就绪: $($check.Detail)" "$checkName is not ready now: $($check.Detail)"
             }
             else {
-                Write-WarnLine "$($check.Name) 失败: $($check.Detail)" "$($check.Name) failed: $($check.Detail)"
+                Write-WarnLine "$checkName 失败: $($check.Detail)" "$checkName failed: $($check.Detail)"
             }
         }
     }
@@ -663,7 +678,7 @@ function Show-Summary {
         Write-InfoLine '日志文件' 'Log file' $script:LogPath
     }
     else {
-        Write-InfoLine '日志文件' 'Log file' (T 'DryRun 模式未创建日志文件' 'No log file was created in DryRun mode')
+        Write-InfoLine '日志文件' 'Log file' (T '预演模式未创建日志文件' 'No log file was created in DryRun mode')
     }
 
     if ($script:BackupPaths.Count -gt 0) {
@@ -681,7 +696,7 @@ function Show-Summary {
     }
 
     if ($DryRun) {
-        Write-WarnLine '当前是 DryRun，没有写入任何修复。' 'This was a DryRun. No repair changes were written.'
+        Write-WarnLine '当前是预演模式，没有写入任何修复。' 'This was a DryRun. No repair changes were written.'
     }
     else {
         Write-Ok '修复流程已完成。请完全退出并重新打开 Codex Desktop。' 'Repair flow finished. Fully quit and reopen Codex Desktop.'
@@ -717,7 +732,7 @@ try {
     Write-Step '停止可能锁住 marketplace 的 extension-host 进程。' 'Stop extension-host processes that may lock the marketplace.'
     Stop-ExtensionHostProcess -CacheRoot $cacheMarketplaceRoot
 
-    Write-Step '重建 .tmp 下的 bundled marketplace。' 'Rebuild the bundled marketplace under .tmp.'
+    Write-Step '重建 .tmp 下的 bundled 插件市场。' 'Rebuild the bundled marketplace under .tmp.'
     Reset-TmpMarketplace -BundledSourceRoot $bundledSource.PluginRoot -TmpMarketplaceRoot $tmpMarketplaceRoot
 
     Write-Step '同步 bundled 插件缓存并重建 latest 链接。' 'Sync bundled plugin cache and recreate latest links.'
@@ -726,7 +741,7 @@ try {
     $computerUseVersion = $pluginVersions['computer-use']
     $helperPath = Join-Path $cacheMarketplaceRoot "computer-use\$computerUseVersion\node_modules\@oai\sky\bin\windows\codex-computer-use.exe"
     Write-InfoLine 'Computer Use 插件版本' 'Computer Use plugin version' $computerUseVersion
-    Write-InfoLine 'Computer Use helper' 'Computer Use helper' $helperPath
+    Write-InfoLine 'Computer Use 辅助程序' 'Computer Use helper' $helperPath
 
     Write-Step '备份并修正 config.toml。' 'Back up and update config.toml.'
     Update-ConfigToml -ConfigPath $configPath -NotifyPath $helperPath -PluginIds $requiredPluginIds -MarketplacePath $marketplaceConfigPath
@@ -736,8 +751,9 @@ try {
     Show-Summary
 }
 catch {
+    $script:ExitCode = 1
     Write-Host ''
-    Write-Host ('[ERROR] ' + $_.Exception.Message)
+    Write-Host ((T '[错误] ' '[ERROR] ') + $_.Exception.Message) -ForegroundColor Red
     if ($script:LogPath) {
         Write-InfoLine '日志文件' 'Log file' $script:LogPath
     }
@@ -746,8 +762,10 @@ catch {
             Write-InfoLine '备份文件或目录' 'Backup file or directory' $backupPath
         }
     }
-    exit 1
 }
 finally {
     Stop-RepairTranscript
+    Wait-BeforeExit
 }
+
+exit $script:ExitCode
