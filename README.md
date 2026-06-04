@@ -55,14 +55,14 @@ Run the repair:
 pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1"
 ```
 
-After the script finishes, reopen Codex Desktop. The Computer Use native pipe is only injected during Desktop startup.
+After the script finishes, the window stays open and waits for Enter so the result, log path, and backup paths remain visible. Reopen Codex Desktop after the repair. The Computer Use native pipe is only injected during Desktop startup.
 
 `-DryRun` is a current-state check plus a repair plan. It may report items as not ready because it has not written, rebuilt, or backed up anything yet. Remove `-DryRun` to run the actual repair.
 
-For automation, you may skip the interactive language prompt:
+For automation, you may skip the interactive language prompt and the final pause:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" -Language en-US
+pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" -Language en-US -NoPause
 ```
 
 ## What The Script Does
@@ -94,6 +94,7 @@ The script reads the real plugin version from each bundled plugin's `plugin.json
 | `-BundledSourceRoot` | empty | Manually provide the `openai-bundled` source directory |
 | `-Language` | prompt | `zh-CN` or `en-US` |
 | `-Yes` | `false` | Skip the final confirmation prompt |
+| `-NoPause` | `false` | Do not wait for Enter before exiting |
 
 Examples:
 
@@ -174,4 +175,5 @@ It will not help when:
 - The script stops `extension-host.exe` only when it is running from the Codex bundled plugin cache
 - The script backs up and modifies `$CodexHome\config.toml`
 - The script does not create, clone, or initialize a Git repository
+- By default, the script pauses before closing so users can read the result; use `-NoPause` or `-Yes` for unattended runs
 - Run `-DryRun` first when diagnosing a new failure
