@@ -31,7 +31,17 @@ This script is likely useful when you see one or more of these signals:
 
 ## Quick Start
 
-Fully quit Codex Desktop before running the repair.
+Download `repair-codex-computer-use.ps1` from the latest release:
+
+<https://github.com/juren233/Codex-Windows-Computer-use-Fix/releases/latest>
+
+Or download it directly from PowerShell:
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/juren233/Codex-Windows-Computer-use-Fix/releases/latest/download/repair-codex-computer-use.ps1" -OutFile ".\repair-codex-computer-use.ps1"
+```
+
+Fully quit Codex Desktop before running the repair. When the script starts without `-Language`, it asks you to choose a language first.
 
 Preview the actions first:
 
@@ -47,6 +57,14 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1"
 
 After the script finishes, reopen Codex Desktop. The Computer Use native pipe is only injected during Desktop startup.
 
+`-DryRun` is a current-state check plus a repair plan. It may report items as not ready because it has not written, rebuilt, or backed up anything yet. Remove `-DryRun` to run the actual repair.
+
+For automation, you may skip the interactive language prompt:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" -Language en-US
+```
+
 ## What The Script Does
 
 The script performs these actions:
@@ -56,11 +74,13 @@ The script performs these actions:
 3. Backs up and rebuilds `.tmp\bundled-marketplaces\openai-bundled`
 4. Syncs `browser`, `chrome`, `computer-use`, and `latex` into the plugin cache
 5. Recreates `latest` junctions using each plugin's real `plugin.json` version
-6. Updates the `notify` helper path in `config.toml`
-7. Ensures these bundled plugins are enabled:
+6. Rebuilds an incomplete plugin cache even if the version directory already exists
+7. Backs up and updates the `notify` helper path in `config.toml`
+8. Ensures these bundled plugins are enabled:
    - `browser@openai-bundled`
    - `chrome@openai-bundled`
    - `computer-use@openai-bundled`
+9. Runs final validation and exits with failure if required checks do not pass
 
 The script reads the real plugin version from each bundled plugin's `plugin.json`. It does not assume the Codex Desktop app package version is the same as the plugin version.
 
@@ -72,6 +92,8 @@ The script reads the real plugin version from each bundled plugin's `plugin.json
 | `-CodexHome` | `$env:USERPROFILE\.codex` | Codex home directory |
 | `-PackageName` | `OpenAI.Codex` | AppX package name |
 | `-BundledSourceRoot` | empty | Manually provide the `openai-bundled` source directory |
+| `-Language` | prompt | `zh-CN` or `en-US` |
+| `-Yes` | `false` | Skip the final confirmation prompt |
 
 Examples:
 
@@ -97,6 +119,38 @@ After restarting Codex Desktop, use these signals to verify the repair:
 4. A named pipe matching `\\.\pipe\codex-computer-use-*` exists
 5. Computer Use no longer fails with `helper paths are unavailable`
 
+Useful verification commands:
+
+```powershell
+Get-ChildItem -Path "\\.\pipe\" | Where-Object { $_.Name -like "codex-computer-use-*" }
+```
+
+```powershell
+$logRoot = "$env:LOCALAPPDATA\Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\Local\Codex\Logs"
+Get-ChildItem -Path $logRoot -Recurse -Filter "codex-desktop-*.log" |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1 |
+  Select-String -Pattern "computer-use native pipe startup ready|helper paths are unavailable|not_in_bundled_marketplace_plugin_names"
+```
+
+## Logs And Backups
+
+Formal repair runs write a transcript log under:
+
+```text
+$CodexHome\repair-logs\computer-use\repair-*.log
+```
+
+The script also prints every backup path before it exits. Typical backup paths include:
+
+```text
+$CodexHome\config.toml.backup-YYYYMMDD-HHMMSS
+$CodexHome\.tmp\bundled-marketplaces\openai-bundled.backup-YYYYMMDD-HHMMSS
+$CodexHome\plugins\cache\openai-bundled\<plugin>\<version>.backup-YYYYMMDD-HHMMSS
+```
+
+`-DryRun` does not create logs, backups, or file changes. A formal run prints the exact log path and every backup path before it exits.
+
 ## When This Script Will Not Help
 
 This script repairs local bundled marketplace, plugin cache, and helper path drift. It does not fix every Computer Use failure.
@@ -118,6 +172,6 @@ It will not help when:
 
 - The script backs up the existing `.tmp\bundled-marketplaces\openai-bundled` directory before rebuilding it
 - The script stops `extension-host.exe` only when it is running from the Codex bundled plugin cache
-- The script modifies `$CodexHome\config.toml`
+- The script backs up and modifies `$CodexHome\config.toml`
 - The script does not create, clone, or initialize a Git repository
 - Run `-DryRun` first when diagnosing a new failure
