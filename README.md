@@ -33,7 +33,7 @@ This script is likely useful when you see one or more of these signals:
 
 Download `repair-codex-computer-use.ps1` from the latest release:
 
-<https://github.com/juren233/Codex-Windows-Computer-use-Fix/releases/latest>
+[latest Release](https://github.com/juren233/Codex-Windows-Computer-use-Fix/releases/latest)
 
 Or download it directly from PowerShell:
 
