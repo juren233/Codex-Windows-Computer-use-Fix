@@ -20,6 +20,7 @@
 - `.tmp\bundled-marketplaces\openai-bundled` 目录残缺
 - `config.toml` 里的 `notify` 指向已经不存在的旧版 `codex-computer-use.exe`
 - Codex Desktop 启动后没有出现 `\\.\pipe\codex-computer-use-*`
+- 新版 Computer Use 入口脚本因为 `@oai/sky` package exports 限制报 `ERR_PACKAGE_PATH_NOT_EXPORTED`
 
 ## 环境要求
 
@@ -39,7 +40,7 @@
 Invoke-WebRequest -Uri "https://github.com/juren233/Codex-Windows-Computer-use-Fix/releases/latest/download/repair-codex-computer-use.ps1" -OutFile ".\repair-codex-computer-use.ps1"
 ```
 
-运行修复前，建议先完全退出 Codex Desktop。脚本启动时如果没有传 `-Language`，会先要求选择语言。
+运行修复前，建议先完全退出 Codex Desktop。脚本启动时如果没有传 `-Language`，会先要求选择语言，然后选择[开始修复]或[清除之前的备份]。
 
 先预演将要执行的动作：
 
@@ -90,11 +91,11 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ".\repair-codex-computer-use.ps1" 
    - `browser@openai-bundled`
    - `chrome@openai-bundled`
    - `computer-use@openai-bundled`
-9. 执行最终硬校验，关键项不通过时以失败退出
+10. 执行最终硬校验，关键项不通过时以失败退出
 
 脚本会读取每个 bundled 插件 `plugin.json` 中的真实插件版本号，不会把 Codex Desktop 的 App 包版本误当成插件版本。
 
-清理模式只删除本脚本产生的备份路径：
+语言选择后的[清除之前的备份]模式，或命令行 `-CleanupBackups` 模式，只删除本脚本产生的备份路径：
 
 1. `$CodexHome\config.toml.backup-*`
 2. `$CodexHome\.tmp\bundled-marketplaces\openai-bundled.backup-*`

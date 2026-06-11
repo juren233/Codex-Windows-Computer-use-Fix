@@ -20,6 +20,7 @@ $script:DeletedBackupPaths = [System.Collections.Generic.List[string]]::new()
 $script:TranscriptStarted = $false
 $script:LogPath = $null
 $script:ExitCode = 0
+$script:Operation = 'Repair'
 
 function Select-UiLanguage {
     if (-not [string]::IsNullOrWhiteSpace($Language)) {
@@ -70,6 +71,40 @@ function Write-Title {
     Write-Host '==============================================='
     Write-Host (T 'Codex Computer Use 修复向导' 'Codex Computer Use Repair Wizard')
     Write-Host '==============================================='
+}
+
+function Select-Operation {
+    if ($CleanupBackups) {
+        $script:Operation = 'CleanupBackups'
+        return
+    }
+
+    if ($Yes -or [Console]::IsInputRedirected) {
+        $script:Operation = 'Repair'
+        return
+    }
+
+    Write-Section '选择操作' 'Choose action'
+    Write-Host (T '1. 开始修复' '1. Start repair')
+    Write-Host (T '2. 清除之前的备份' '2. Clean previous backups')
+    Write-Host ''
+
+    while ($true) {
+        $choice = Read-Host (T '请选择操作 [1/2]' 'Select action [1/2]')
+        switch ($choice) {
+            '1' {
+                $script:Operation = 'Repair'
+                return
+            }
+            '2' {
+                $script:Operation = 'CleanupBackups'
+                return
+            }
+            default {
+                Write-Host (T '请输入 1 或 2。' 'Please enter 1 or 2.')
+            }
+        }
+    }
 }
 
 function Write-Section {
@@ -436,6 +471,126 @@ function Stop-ExtensionHostProcess {
     }
 }
 
+function Get-LatestCuaSkyPackageRoot {
+    $runtimeRoot = Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\runtimes\cua_node'
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA) -or -not (Test-Path -LiteralPath $runtimeRoot)) {
+        return $null
+    }
+
+    $candidates = Get-ChildItem -LiteralPath $runtimeRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $skyRoot = Join-Path $_.FullName 'bin\node_modules\@oai\sky'
+        if (Test-Path -LiteralPath (Join-Path $skyRoot 'package.json')) {
+            [PSCustomObject]@{
+                Path          = $skyRoot
+                LastWriteTime = $_.LastWriteTime
+            }
+        }
+    }
+
+    $latest = $candidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $latest) {
+        return $null
+    }
+
+    return [string]$latest.Path
+}
+
+function Get-ComputerUseRuntimeState {
+    $skyRoot = Get-LatestCuaSkyPackageRoot
+    $helperPath = $null
+    if (-not [string]::IsNullOrWhiteSpace($skyRoot)) {
+        $helperPath = Join-Path $skyRoot 'bin\windows\codex-computer-use.exe'
+    }
+
+    [PSCustomObject]@{
+        SkyPackageRoot = $skyRoot
+        HelperPath     = $helperPath
+        HelperReady    = (-not [string]::IsNullOrWhiteSpace($helperPath) -and (Test-Path -LiteralPath $helperPath))
+    }
+}
+
+function Test-ComputerUseClientBlockedImport {
+    param([string]$ClientPath)
+
+    if (-not (Test-Path -LiteralPath $ClientPath)) {
+        return $false
+    }
+
+    $content = Get-Content -LiteralPath $ClientPath -Raw
+    return ($content.IndexOf('@oai/sky/dist/project/cua/sky_js/src/targets/windows/internal/computer_use_client_base.js', [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+}
+
+function Repair-ComputerUseClientEntryPoint {
+    param([string]$ClientPath)
+
+    if (-not (Test-Path -LiteralPath $ClientPath)) {
+        Write-WarnLine "Computer Use 入口脚本不存在，跳过兼容修复: $ClientPath" "Computer Use client script does not exist. Skipping compatibility repair: $ClientPath"
+        return
+    }
+
+    if (-not (Test-ComputerUseClientBlockedImport -ClientPath $ClientPath)) {
+        Write-Ok "Computer Use 入口脚本无需兼容修复: $ClientPath" "Computer Use client script does not need compatibility repair: $ClientPath"
+        return
+    }
+
+    $adapterContent = @'
+const TOOL_SURFACE_META_KEY = "codex/toolSurface";
+
+export async function setupComputerUseRuntime({ globals = globalThis } = {}) {
+  const { sky } = await import("@oai/sky");
+  return installComputerUseRuntime({ globals, sky });
+}
+
+function installComputerUseRuntime({ globals, sky }) {
+  const instrumentedSky = new Proxy(sky, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") {
+        return value;
+      }
+
+      return (...args) => {
+        globals.nodeRepl?.setResponseMeta({
+          [TOOL_SURFACE_META_KEY]: {
+            kind: "computerUse",
+            app: getComputerUseAppReference(args[0]),
+          },
+        });
+        return Reflect.apply(value, target, args);
+      };
+    },
+  });
+  globals.sky = instrumentedSky;
+  return instrumentedSky;
+}
+
+function getComputerUseAppReference(value) {
+  const app = value?.window?.app ?? value?.app;
+  const trimmedApp = typeof app === "string" ? app.trim() : "";
+  if (!trimmedApp) {
+    return null;
+  }
+
+  return looksLikeAppIdentifier(trimmedApp)
+    ? { kind: "appId", appId: trimmedApp }
+    : { kind: "displayName", displayName: trimmedApp };
+}
+
+function looksLikeAppIdentifier(value) {
+  return (
+    /^[a-z][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)+$/.test(value) ||
+    /^process:/i.test(value) ||
+    /(^|[\\/])[^\\/]+\.exe$/i.test(value) ||
+    /[A-Za-z0-9][A-Za-z0-9.-]*_[A-Za-z0-9]+![A-Za-z0-9.-]+/.test(value)
+  );
+}
+'@
+
+    Invoke-IfNeeded "修正 Computer Use 入口脚本兼容性 $ClientPath" "Repair Computer Use client script compatibility $ClientPath" {
+        Set-Content -LiteralPath $ClientPath -Value $adapterContent -Encoding UTF8
+    }
+}
+
 function Reset-TmpMarketplace {
     param(
         [string]$BundledSourceRoot,
@@ -448,9 +603,7 @@ function Reset-TmpMarketplace {
     }
 
     Move-ToBackupIfExists -Path $TmpMarketplaceRoot | Out-Null
-    Invoke-IfNeeded "复制 bundled 插件市场到 $TmpMarketplaceRoot" "Copy bundled marketplace to $TmpMarketplaceRoot" {
-        Copy-Item -LiteralPath $BundledSourceRoot -Destination $tmpParent -Recurse -Force
-    }
+    Copy-DirectoryContents -SourcePath $BundledSourceRoot -DestinationPath $TmpMarketplaceRoot
 }
 
 function Test-PluginCacheReady {
@@ -472,7 +625,6 @@ function Test-PluginCacheReady {
         }
         'computer-use' {
             $required.Add((Join-Path $VersionDirectory 'scripts\computer-use-client.mjs'))
-            $required.Add((Join-Path $VersionDirectory 'node_modules\@oai\sky\bin\windows\codex-computer-use.exe'))
         }
         'latex' {
             $required.Add((Join-Path $VersionDirectory 'bin\tectonic.exe'))
@@ -596,6 +748,25 @@ function Ensure-NotifyLine {
     $Lines.Insert(0, $notifyLine)
 }
 
+function Remove-LegacyComputerUseNotifyLine {
+    param([System.Collections.Generic.List[string]]$Lines)
+
+    for ($i = $Lines.Count - 1; $i -ge 0; $i--) {
+        if ($Lines[$i] -match '^notify\s*=' -and $Lines[$i] -match 'plugins[\\]{1,2}cache[\\]{1,2}openai-bundled[\\]{1,2}computer-use' -and $Lines[$i] -match 'codex-computer-use\.exe') {
+            $Lines.RemoveAt($i)
+            if ($i -lt $Lines.Count -and $Lines[$i] -eq '') {
+                $Lines.RemoveAt($i)
+            }
+        }
+    }
+}
+
+function Test-ConfigHasLegacyComputerUseNotify {
+    param([string]$ConfigContent)
+
+    return ($ConfigContent -match 'notify\s*=.*plugins[\\]{1,2}cache[\\]{1,2}openai-bundled[\\]{1,2}computer-use' -and $ConfigContent -match 'codex-computer-use\.exe')
+}
+
 function Ensure-PluginEnabledSection {
     param(
         [System.Collections.Generic.List[string]]$Lines,
@@ -689,7 +860,6 @@ function Backup-ConfigFile {
 function Update-ConfigToml {
     param(
         [string]$ConfigPath,
-        [string]$NotifyPath,
         [string[]]$PluginIds,
         [string]$MarketplacePath
     )
@@ -701,7 +871,7 @@ function Update-ConfigToml {
         $lines.Add($line)
     }
 
-    Ensure-NotifyLine -Lines $lines -NotifyPath $NotifyPath
+    Remove-LegacyComputerUseNotifyLine -Lines $lines
     foreach ($pluginId in $PluginIds) {
         Ensure-PluginEnabledSection -Lines $lines -PluginId $pluginId
     }
@@ -716,21 +886,25 @@ function Update-ConfigToml {
 function Test-FinalRepairResult {
     param(
         [string]$TmpMarketplaceRoot,
-        [string]$HelperPath,
+        [string]$ComputerUseClientPath,
+        [string]$RuntimeHelperPath,
         [string]$ConfigPath,
         [string[]]$PluginIds
     )
 
     $tmpMarketplaceJson = Join-Path $TmpMarketplaceRoot '.agents\plugins\marketplace.json'
+    $tmpMarketplacePlugins = Join-Path $TmpMarketplaceRoot 'plugins'
     $configContent = ''
     if (Test-Path -LiteralPath $ConfigPath) {
         $configContent = Get-Content -LiteralPath $ConfigPath -Raw
     }
 
     $checks = [System.Collections.Generic.List[object]]::new()
-    $checks.Add([PSCustomObject]@{ NameZh = '插件市场文件'; NameEn = 'Marketplace file'; Passed = (Test-Path -LiteralPath $tmpMarketplaceJson); Detail = $tmpMarketplaceJson })
-    $checks.Add([PSCustomObject]@{ NameZh = 'Computer Use 辅助程序'; NameEn = 'Computer Use helper'; Passed = (Test-Path -LiteralPath $HelperPath); Detail = $HelperPath })
-    $checks.Add([PSCustomObject]@{ NameZh = '配置中的辅助程序路径'; NameEn = 'Helper path in config'; Passed = ($configContent.IndexOf($HelperPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0); Detail = $HelperPath })
+    $checks.Add([PSCustomObject]@{ NameZh = '插件市场目录'; NameEn = 'Marketplace directory'; Passed = ((Test-Path -LiteralPath $tmpMarketplaceJson) -or (Test-Path -LiteralPath $tmpMarketplacePlugins)); Detail = $TmpMarketplaceRoot })
+    $checks.Add([PSCustomObject]@{ NameZh = 'Computer Use 入口脚本'; NameEn = 'Computer Use client script'; Passed = (Test-Path -LiteralPath $ComputerUseClientPath); Detail = $ComputerUseClientPath })
+    $checks.Add([PSCustomObject]@{ NameZh = 'Computer Use 入口兼容性'; NameEn = 'Computer Use client compatibility'; Passed = (-not (Test-ComputerUseClientBlockedImport -ClientPath $ComputerUseClientPath)); Detail = $ComputerUseClientPath })
+    $checks.Add([PSCustomObject]@{ NameZh = 'Computer Use 运行时辅助程序'; NameEn = 'Computer Use runtime helper'; Passed = (-not [string]::IsNullOrWhiteSpace($RuntimeHelperPath) -and (Test-Path -LiteralPath $RuntimeHelperPath)); Detail = $(if ([string]::IsNullOrWhiteSpace($RuntimeHelperPath)) { '未找到 cua_node @oai/sky 运行时' } else { $RuntimeHelperPath }) })
+    $checks.Add([PSCustomObject]@{ NameZh = '配置中未残留旧插件缓存 helper notify'; NameEn = 'No stale plugin-cache helper notify in config'; Passed = (-not (Test-ConfigHasLegacyComputerUseNotify -ConfigContent $configContent)); Detail = $ConfigPath })
 
     foreach ($pluginId in $PluginIds) {
         $header = "[plugins.`"$pluginId`"]"
@@ -812,6 +986,7 @@ try {
     Select-UiLanguage
     Write-Title
     Assert-PowerShell7
+    Select-Operation
 
     $codexHomePath = [System.IO.Path]::GetFullPath($CodexHome)
     $configPath = Join-Path $codexHomePath 'config.toml'
@@ -827,7 +1002,7 @@ try {
 
     Start-RepairTranscript -CodexHomePath $codexHomePath
 
-    if ($CleanupBackups) {
+    if ($script:Operation -eq 'CleanupBackups') {
         $backupItems = Get-ScriptBackupItems -CodexHomePath $codexHomePath
         Confirm-CleanupBackupsPlan -BackupItems $backupItems
         Remove-ScriptBackupItems -BackupItems $backupItems
@@ -852,14 +1027,24 @@ try {
         $pluginVersions = Sync-PluginCache -BundledSourceRoot $bundledSource.PluginRoot -CacheMarketplaceRoot $cacheMarketplaceRoot -PluginNames $pluginNames
 
         $computerUseVersion = $pluginVersions['computer-use']
-        $helperPath = Join-Path $cacheMarketplaceRoot "computer-use\$computerUseVersion\node_modules\@oai\sky\bin\windows\codex-computer-use.exe"
+        $computerUseClientPath = Join-Path $cacheMarketplaceRoot "computer-use\$computerUseVersion\scripts\computer-use-client.mjs"
+        $runtimeState = Get-ComputerUseRuntimeState
         Write-InfoLine 'Computer Use 插件版本' 'Computer Use plugin version' $computerUseVersion
-        Write-InfoLine 'Computer Use 辅助程序' 'Computer Use helper' $helperPath
+        Write-InfoLine 'Computer Use 入口脚本' 'Computer Use client script' $computerUseClientPath
+        if ($runtimeState.HelperReady) {
+            Write-InfoLine 'Computer Use 运行时辅助程序' 'Computer Use runtime helper' $runtimeState.HelperPath
+        }
+        else {
+            Write-WarnLine '未找到 Computer Use 运行时辅助程序，请确认 Codex Desktop 已安装 cua_node 运行时。' 'Computer Use runtime helper was not found. Confirm that Codex Desktop installed the cua_node runtime.'
+        }
+
+        Write-Step '修正 Computer Use 入口脚本兼容性。' 'Repair Computer Use client script compatibility.'
+        Repair-ComputerUseClientEntryPoint -ClientPath $computerUseClientPath
 
         Write-Step '备份并修正 config.toml。' 'Back up and update config.toml.'
-        Update-ConfigToml -ConfigPath $configPath -NotifyPath $helperPath -PluginIds $requiredPluginIds -MarketplacePath $marketplaceConfigPath
+        Update-ConfigToml -ConfigPath $configPath -PluginIds $requiredPluginIds -MarketplacePath $marketplaceConfigPath
 
-        $checks = Test-FinalRepairResult -TmpMarketplaceRoot $tmpMarketplaceRoot -HelperPath $helperPath -ConfigPath $configPath -PluginIds $requiredPluginIds
+        $checks = Test-FinalRepairResult -TmpMarketplaceRoot $tmpMarketplaceRoot -ComputerUseClientPath $computerUseClientPath -RuntimeHelperPath $runtimeState.HelperPath -ConfigPath $configPath -PluginIds $requiredPluginIds
         Assert-FinalRepairResult -Checks $checks
         Show-Summary
     }

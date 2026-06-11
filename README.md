@@ -20,6 +20,7 @@ This script is likely useful when you see one or more of these signals:
 - `.tmp\bundled-marketplaces\openai-bundled` is incomplete
 - `notify` in `config.toml` points to a missing `codex-computer-use.exe`
 - `\\.\pipe\codex-computer-use-*` does not appear after Codex Desktop starts
+- The newer Computer Use client fails with `ERR_PACKAGE_PATH_NOT_EXPORTED` because of `@oai/sky` package exports
 
 ## Requirements
 
@@ -39,7 +40,7 @@ Or download it directly from PowerShell:
 Invoke-WebRequest -Uri "https://github.com/juren233/Codex-Windows-Computer-use-Fix/releases/latest/download/repair-codex-computer-use.ps1" -OutFile ".\repair-codex-computer-use.ps1"
 ```
 
-Fully quit Codex Desktop before running the repair. When the script starts without `-Language`, it asks you to choose a language first.
+Fully quit Codex Desktop before running the repair. When the script starts without `-Language`, it asks you to choose a language first, then choose either [Start repair] or [Clean previous backups].
 
 Preview the actions first:
 
@@ -85,16 +86,17 @@ Repair mode performs these actions:
 4. Syncs `browser`, `chrome`, `computer-use`, and `latex` into the plugin cache
 5. Recreates `latest` junctions using each plugin's real `plugin.json` version
 6. Rebuilds an incomplete plugin cache even if the version directory already exists
-7. Backs up and updates the `notify` helper path in `config.toml`
-8. Ensures these bundled plugins are enabled:
+7. Removes stale plugin-cache helper `notify` entries from `config.toml`
+8. Repairs `computer-use-client.mjs` compatibility with newer `@oai/sky` package exports
+9. Ensures these bundled plugins are enabled:
    - `browser@openai-bundled`
    - `chrome@openai-bundled`
    - `computer-use@openai-bundled`
-9. Runs final validation and exits with failure if required checks do not pass
+10. Runs final validation and exits with failure if required checks do not pass
 
 The script reads the real plugin version from each bundled plugin's `plugin.json`. It does not assume the Codex Desktop app package version is the same as the plugin version.
 
-Cleanup mode only removes backup paths created by this script:
+The [Clean previous backups] option after language selection, or the command-line `-CleanupBackups` mode, only removes backup paths created by this script:
 
 1. `$CodexHome\config.toml.backup-*`
 2. `$CodexHome\.tmp\bundled-marketplaces\openai-bundled.backup-*`
